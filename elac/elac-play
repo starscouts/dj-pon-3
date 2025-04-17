@@ -1,0 +1,98 @@
+#!/usr/bin/env node
+global.fs = require('fs');
+global.os = require('os');
+global.path = require('path');
+global.zlib = require('zlib');
+global.child_process = require('child_process');
+
+global.version = "1.1";
+
+global.argv = process.argv;
+argv.shift(); argv.shift();
+
+console.log("Equestria Lossless Audio Codec");
+console.log("    (c) Copyright, Equestria.dev");
+console.log("ELAC Player");
+console.log("    (c) Copyright, Equestria.dev");
+console.log("version " + version);
+console.log("");
+
+try {
+    child_process.execSync("ffmpeg -version");
+    child_process.execSync("ffprobe -version");
+    child_process.execSync("ffplay -version");
+} catch (e) {
+    console.error("Unable to start the ELAC Player:\n    ffmpeg was not found or is incomplete");
+    process.exit(2);
+}
+
+if (argv.length < 1) {
+    console.error("Unable to start the ELAC Player:\n    No input file has been specified");
+    process.exit(2);
+}
+
+global.inputFile = argv[0].trim();
+global.file = path.basename(inputFile);
+
+if (!fs.existsSync(inputFile)) {
+    console.error("Unable to play \"" + file + "\":\n    \"" + inputFile + "\": no such file or directory");
+    process.exit(2);
+}
+
+console.log("Reading Equestria Lossless Audio Codec data...");
+try {
+    global.data = JSON.parse(zlib.inflateSync(fs.readFileSync(inputFile), {
+        level: -1,
+        strategy: 0,
+        memLevel: 9
+    }).toString());
+} catch (e) {
+    console.error("Unable to play \"" + file + "\":\n    \"" + inputFile + "\": unable to decode file");
+    process.exit(2);
+}
+
+if (!data._eqmc) {
+    console.error("Unable to play \"" + file + "\":\n    \"" + inputFile + "\": not a valid ELAC file");
+    process.exit(2);
+}
+
+global.inputs = data.files;
+
+for (let input of inputs) {
+    console.log("\n" + input._id + ":\n    " + Object.keys(input.tags).map(i => { return i + ": " + input.tags[i]; }).join("\n    ") + "\n");
+
+    try {
+        if (fs.existsSync(os.tmpdir() + "/elac-play-temp")) {
+            fs.rmSync(os.tmpdir() + "/elac-play-temp", { recursive: true });
+        }
+        fs.mkdirSync(os.tmpdir() + "/elac-play-temp", { recursive: true });
+    } catch (e) {
+        console.error("Unable to decode \"" + file + "\":\n    Cannot create temporary working directory");
+        process.exit(2);
+    }
+
+    console.log("Decoding \"" + inputFile + ":/" + input._id + "\"...");
+
+    let outFile = os.tmpdir() + "/elac-play-temp/" + input._id + ".mp3";
+    if (input.lossless) {
+        outFile = os.tmpdir() + "/elac-play-temp/" + input._id + ".flac";
+    }
+
+    fs.writeFileSync(outFile, zlib.inflateSync(Buffer.from(input.data, "base64"), {
+        level: -1,
+        strategy: 0,
+        memLevel: 9
+    }));
+
+    console.log("Playing \"" + inputFile + ":/" + input._id + "\"...");
+    child_process.spawnSync("ffplay", [ "-hide_banner", "-autoexit", "-nodisp", "--", outFile ], { stdio: "inherit" });
+
+    try {
+        fs.rmSync(os.tmpdir() + "/elac-play-temp", { recursive: true });
+    } catch (e) {
+        console.error("Unable to encode \"" + file + "\":\n    Cannot clear temporary working directory");
+        process.exit(2);
+    }
+}
+
+console.log("Done!");

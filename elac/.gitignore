@@ -1,0 +1,7 @@
+test.eqmc
+*.eqmc
+*/*.eqmc
+Test.elac
+test.elac
+*.elac
+*/*.elac

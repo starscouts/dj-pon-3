@@ -1,0 +1,163 @@
+#!/usr/bin/env node
+global.path = require('path');
+global.fs = require('fs');
+global.zlib = require('zlib');
+global.os = require('os');
+global.child_process = require('child_process');
+global.uuid = require('uuid')['v4'];
+
+global.version = "1.1";
+
+global.argv = process.argv;
+argv.shift(); argv.shift();
+
+console.log("Equestria Lossless Audio Codec");
+console.log("    (c) Copyright, Equestria.dev");
+console.log("ELAC Encoder");
+console.log("    (c) Copyright, Equestria.dev");
+console.log("version " + version);
+console.log("");
+
+try {
+    child_process.execSync("ffmpeg -version");
+    child_process.execSync("ffprobe -version");
+    child_process.execSync("ffplay -version");
+} catch (e) {
+    console.error("Unable to start the ELAC Encoder:\n    ffmpeg was not found or is incomplete");
+    process.exit(2);
+}
+
+if (argv.length < 1) {
+    console.error("Unable to start the ELAC Encoder:\n    No output file has been specified");
+    process.exit(2);
+}
+
+global.output = argv[0].trim();
+global.dir = path.dirname(output);
+global.file = path.basename(output);
+
+if (!output.endsWith(".elac")) {
+    console.warn("warning: specified output (\"" + output + "\") does not contain extension, using \"" + output + ".elac\" instead.");
+    file = file + ".elac";
+    output = output + ".elac";
+}
+
+if (!fs.existsSync(dir)) {
+    console.error("Unable to encode \"" + file + "\":\n    \"" + dir + "\": no such file or directory");
+    process.exit(2);
+}
+
+if (fs.existsSync(output)) {
+    console.error("Unable to encode \"" + file + "\":\n    \"" + output + "\": file exists");
+    process.exit(2);
+}
+
+if (argv.length < 2) {
+    console.error("Unable to encode \"" + file + "\":\n    No input stream found");
+    process.exit(2);
+}
+
+global.inputs = argv; inputs.shift();
+global.valid_inputs = [];
+global.out = {
+    _eqmc: true,
+    files: []
+};
+
+for (let input of inputs) {
+    if (!fs.existsSync(input)) {
+        console.warn("warning: specified input (\"" + input + "\") cannot be used: no such file or directory.");
+        continue;
+    }
+    try {
+        fs.readFileSync(input);
+    } catch (e) {
+        console.warn("warning: specified input (\"" + input + "\") cannot be used: file is unreadable.");
+        continue;
+    }
+    let probe = JSON.parse(child_process.execFileSync("ffprobe", [ "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", input]).toString());
+
+    let streams = probe.streams.filter(i => i['codec_type'] === "audio");
+
+    if (streams.length < 1) {
+        console.warn("warning: specified input (\"" + input + "\") cannot be used: no audio streams found.");
+        continue;
+    }
+
+    if (streams.length > 1) {
+        console.warn("warning: specified input (\"" + input + "\") contains more than one audio stream, only the " + probe.streams[0]["codec_name"] + " stream will be used.");
+        continue;
+    }
+
+    valid_inputs.push(input);
+}
+
+for (let input of valid_inputs) {
+    let probe = JSON.parse(child_process.execFileSync("ffprobe", [ "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", input]).toString());
+    let streams = probe.streams.filter(i => i['codec_type'] === "audio");
+    let fileId = uuid();
+
+    let lossless = false;
+    let outFile = os.tmpdir() + "/elac-encode-temp/" + fileId + ".mp3";
+
+    if (streams[0]['codec_name'].includes("pcm") || streams[0]['codec_name'].includes("flac") || streams[0]['codec_name'].includes("alac") || streams[0]['codec_name'].includes("dts")) {
+        lossless = true;
+        outFile = os.tmpdir() + "/elac-encode-temp/" + fileId + ".flac";
+    }
+
+    console.log("\n" + input + ":");
+    console.log("    Duration: " + new Date(probe.format['duration'] * 1000).toISOString().substring(11, 19));
+    console.log("    Container Type: " + probe.format['format_long_name']);
+    console.log("    Stream Type: " + streams[0]['codec_long_name']);
+    console.log("    ELAC Stream ID: " + fileId);
+    console.log("    Lossless Mode: " + (lossless ? "yes" : "no") + " (" + (lossless ? "ELAC Physical Lossless" : "ELAC Emulated Lossless") + ")");
+    console.log("");
+
+    try {
+        if (fs.existsSync(os.tmpdir() + "/elac-encode-temp")) {
+            fs.rmSync(os.tmpdir() + "/elac-encode-temp", { recursive: true });
+        }
+        fs.mkdirSync(os.tmpdir() + "/elac-encode-temp", { recursive: true });
+    } catch (e) {
+        console.error("Unable to encode \"" + file + "\":\n    Cannot create temporary working directory");
+        process.exit(2);
+    }
+
+    console.log("Encoding \"" + output + ":/" + fileId + "\"...");
+    try {
+        child_process.execFileSync("ffmpeg", [ "-v", "quiet", "-i", input, "-map_metadata", "-1", outFile ]);
+        if (!fs.existsSync(outFile)) {
+            console.error("Unable to encode \"" + file + "\":\n    Successfully encoded file " + fileId + ", but file does not exist");
+            process.exit(2);
+        }
+    } catch (e) {
+        console.error("Unable to encode \"" + file + "\":\n    Failed to encode file " + fileId);
+        process.exit(2);
+    }
+
+    out.files.push({
+        _id: fileId,
+        lossless,
+        data: zlib.deflateSync(fs.readFileSync(outFile), {
+            level: -1,
+            strategy: 0,
+            memLevel: 9
+        }).toString("base64"),
+        tags: probe.format.tags
+    })
+
+    try {
+        fs.rmSync(os.tmpdir() + "/elac-encode-temp", { recursive: true });
+    } catch (e) {
+        console.error("Unable to encode \"" + file + "\":\n    Cannot clear temporary working directory");
+        process.exit(2);
+    }
+}
+
+console.log("Writing to \"" + output + "\"...");
+fs.writeFileSync(output, zlib.deflateSync(JSON.stringify(out), {
+    level: -1,
+    strategy: 0,
+    memLevel: 9
+}));
+console.log("Done!");
